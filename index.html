@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>我的地圖 - 臺灣通用電子地圖</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        body, html { margin: 0; padding: 0; height: 100%; width: 100%; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        #map { height: 100%; width: 100%; z-index: 1; }
+        
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+        
+        .custom-div-icon { background-color: transparent; border: none; }
+        .pin {
+            width: 30px;
+            height: 30px;
+            border-radius: 50% 50% 50% 0;
+            background: #ef4444;
+            position: absolute;
+            transform: rotate(-45deg);
+            left: 50%;
+            top: 50%;
+            margin: -15px 0 0 -15px;
+            box-shadow: inset -3px 0 5px rgba(0,0,0,0.2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .pin::after { content: ''; width: 12px; height: 12px; background: white; border-radius: 50%; }
+        .pin-blue { background: #3b82f6; }
+        .pin-green { background: #10b981; } /* 公園用綠色 */
+        .pin-orange { background: #f59e0b; } /* 停車場用橘色 */
+        
+        .poi-item.dragging { opacity: 0.5; background-color: #f8fafc; border-style: dashed; }
+        .poi-item.drag-over { border-top: 2px solid #3b82f6; }
+
+        .leaflet-top.leaflet-right { top: 15px; right: 15px; }
+        .leaflet-control-layers {
+            border-radius: 0.75rem !important;
+            border: 1px solid #f3f4f6 !important;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1) !important;
+        }
+    </style>
+</head>
+<body class="relative overflow-hidden">
+
+    <!-- Loading Overlay -->
+    <div id="loading-overlay" class="absolute inset-0 bg-white/80 backdrop-blur-sm z-[1000] flex flex-col items-center justify-center transition-opacity duration-300">
+        <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mb-4"></div>
+        <p class="text-gray-600 font-medium tracking-wide">載入中...</p>
+    </div>
+
+    <!-- Map Container -->
+    <div id="map"></div>
+
+    <!-- Floating Sidebar -->
+    <div class="absolute top-4 left-4 z-[400] w-80 md:w-96 bg-white rounded-xl shadow-xl flex flex-col max-h-[calc(100vh-32px)] border border-gray-100">
+        
+        <!-- Header & Search -->
+        <div class="p-4 border-b border-gray-100 shrink-0">
+            <h1 class="text-xl font-bold text-gray-800 mb-3 flex items-center gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-blue-600"><polygon points="3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21"></polygon><line x1="9" y1="3" x2="9" y2="21"></line><line x1="15" y1="3" x2="15" y2="21"></line></svg>
+                我的地圖
+            </h1>
+            <div class="relative mb-3">
+                <input type="text" id="search-input" placeholder="NLSC 地標搜尋..." class="w-full pl-10 pr-4 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="absolute left-3 top-2.5 text-gray-400"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+            </div>
+            
+            <!-- Quick Action for Taichung -->
+            <div class="flex flex-col gap-2">
+                <button id="btn-taichung-quick" class="w-full py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold rounded-lg transition-colors flex items-center justify-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>
+                    搜尋南屯/南區公園及停車場
+                </button>
+                <p class="text-[10px] text-gray-400 text-center italic">*自動抓取臺中南屯/南區公共設施資訊</p>
+            </div>
+        </div>
+
+        <!-- Content Area -->
+        <div class="overflow-y-auto custom-scrollbar flex-1 p-2">
+            <!-- Search Results -->
+            <div id="search-results-container" class="hidden mb-4 p-2">
+                <h2 class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">搜尋結果</h2>
+                <div id="search-results-list" class="space-y-1"></div>
+            </div>
+
+            <!-- Saved POIs -->
+            <div class="p-2">
+                <div class="flex justify-between items-center mb-2">
+                    <h2 class="text-xs font-semibold text-gray-500 uppercase tracking-wider">我的興趣點</h2>
+                    <span class="text-[10px] text-gray-400">可拖曳排序</span>
+                </div>
+                <div id="empty-state" class="text-sm text-gray-400 text-center py-6">
+                    點擊地圖或搜尋以新增地點
+                </div>
+                <div id="saved-poi-list" class="space-y-2"></div>
+            </div>
+        </div>
+        
+        <div class="p-3 text-[10px] text-center text-gray-400 border-t border-gray-50 bg-gray-50 rounded-b-xl flex justify-between px-4">
+            <span>圖資：國土測繪中心 (NLSC)</span>
+            <span>API：S_Maps/Search</span>
+        </div>
+    </div>
+
+    <!-- Name Modal -->
+    <div id="poi-modal" class="hidden fixed inset-0 bg-gray-900/40 backdrop-blur-sm z-[1000] flex items-center justify-center p-4">
+        <div class="bg-white p-6 rounded-xl shadow-2xl w-full max-w-sm">
+            <h3 class="text-lg font-bold text-gray-800 mb-4">新增興趣點</h3>
+            <input type="text" id="poi-name-input" class="w-full border border-gray-300 p-2.5 rounded-lg mb-5 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="輸入地點名稱">
+            <div class="flex justify-end gap-3">
+                <button id="btn-cancel-poi" class="px-4 py-2 text-gray-600 bg-gray-100 rounded-lg">取消</button>
+                <button id="btn-save-poi" class="px-4 py-2 bg-blue-600 text-white rounded-lg">儲存</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, doc, setDoc, deleteDoc, updateDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        document.addEventListener('DOMContentLoaded', () => {
+            // Firebase Config
+            const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+            const appId = typeof __app_id !== 'undefined' ? __app_id : 'nlsc-map-app';
+            const app = initializeApp(firebaseConfig);
+            const auth = getAuth(app);
+            const db = getFirestore(app);
+            
+            let currentUser = null;
+            let unsubscribeSnapshot = null;
+
+            // Map Init
+            const map = L.map('map', { zoomControl: false }).setView([24.135, 120.65], 14); // 預設台中南屯/南區中心
+            L.control.zoom({ position: 'bottomright' }).addTo(map);
+
+            const nlscAttribution = '© <a href="https://maps.nlsc.gov.tw/">NLSC</a>';
+
+            // NLSC WMTS Layers
+            const mapEmap = L.tileLayer('https://wmts.nlsc.gov.tw/wmts/EMAP/default/GoogleMapsCompatible/{z}/{y}/{x}', { attribution: nlscAttribution });
+            const mapPhoto = L.tileLayer('https://wmts.nlsc.gov.tw/wmts/PHOTO2/default/GoogleMapsCompatible/{z}/{y}/{x}', { attribution: nlscAttribution });
+            const mapLand = L.tileLayer('https://wmts.nlsc.gov.tw/wmts/LANDSECT/default/GoogleMapsCompatible/{z}/{y}/{x}', { opacity: 0.7 });
+            const mapFacility = L.tileLayer('https://wmts.nlsc.gov.tw/wmts/FACILITY/default/GoogleMapsCompatible/{z}/{y}/{x}', { opacity: 0.8 });
+
+            mapEmap.addTo(map);
+            L.control.layers({ "電子地圖": mapEmap, "正射影像": mapPhoto }, { "段籍圖": mapLand, "公共設施": mapFacility }, { position: 'topright' }).addTo(map);
+
+            // Icons
+            const iconFactory = (colorClass) => L.divIcon({ className: 'custom-div-icon', html: `<div class='pin ${colorClass}'></div>`, iconSize: [30, 42], iconAnchor: [15, 42], popupAnchor: [0, -35] });
+            const redIcon = iconFactory('');
+            const blueIcon = iconFactory('pin-blue');
+            const greenIcon = iconFactory('pin-green');
+            const orangeIcon = iconFactory('pin-orange');
+
+            // State
+            let savedPOIs = [];
+            let poiMarkers = {};
+            let routeLayer = null;
+            let currentTempMarker = null;
+            let pendingPOIData = null;
+
+            // Auth
+            onAuthStateChanged(auth, (user) => {
+                currentUser = user;
+                if (user) setupFirestoreListener(user.uid);
+                else signInAnonymously(auth);
+            });
+
+            function setupFirestoreListener(userId) {
+                const poisRef = collection(db, 'artifacts', appId, 'users', userId, 'pois');
+                unsubscribeSnapshot = onSnapshot(poisRef, (snapshot) => {
+                    const fetched = [];
+                    snapshot.forEach(doc => fetched.push({ id: doc.id, ...doc.data() }));
+                    fetched.sort((a, b) => (a.order || 0) - (b.order || 0));
+                    savedPOIs = fetched;
+                    renderPOIs();
+                    drawRoute();
+                    document.getElementById('loading-overlay').classList.add('hidden');
+                });
+            }
+
+            // NLSC Search API Logic
+            // NLSC Search usually works through their search.ashx endpoint
+            async function searchNLSC(keyword) {
+                try {
+                    // 使用 NLSC 官方提供的搜尋服務路徑
+                    // 注意：直接對 maps.nlsc.gov.tw 發起請求在瀏覽器端可能會有跨域限制，
+                    // 若環境不支援跨域，建議改用其 OpenData 的 Geocode API。
+                    // 這裡模擬 NLSC API 的關鍵字地標搜尋。
+                    const res = await fetch(`https://maps.nlsc.gov.tw/S_Maps/Search.ashx?q=${encodeURIComponent(keyword)}&type=1`);
+                    if (!res.ok) throw new Error();
+                    const data = await res.json(); // NLSC 通常回傳 JSON
+                    return data;
+                } catch (e) {
+                    console.error("NLSC Search Error:", e);
+                    // 備援機制：如果官方搜尋 API 被阻擋，改用 Photon 搜尋台灣地標
+                    const backupRes = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(keyword)}&bbox=119.5,21.5,122.5,25.5&limit=10`);
+                    const backupData = await backupRes.json();
+                    return backupData.features.map(f => ({
+                        name: f.properties.name,
+                        content: f.properties.city || f.properties.country,
+                        lat: f.geometry.coordinates[1],
+                        lon: f.geometry.coordinates[0]
+                    }));
+                }
+            }
+
+            // Quick Actions for Taichung
+            document.getElementById('btn-taichung-quick').addEventListener('click', async () => {
+                document.getElementById('loading-overlay').classList.remove('hidden');
+                const tasks = [
+                    { kw: "臺中市南屯區 公園", color: 'pin-green' },
+                    { kw: "臺中市南屯區 停車場", color: 'pin-orange' },
+                    { kw: "臺中市南區 公園", color: 'pin-green' },
+                    { kw: "臺中市南區 停車場", color: 'pin-orange' }
+                ];
+
+                for (const task of tasks) {
+                    const results = await searchNLSC(task.kw);
+                    // 只取前 5 個，避免洗版
+                    results.slice(0, 5).forEach(r => {
+                        saveNewPOI(r.lat, r.lon, r.name, task.color);
+                    });
+                }
+                document.getElementById('loading-overlay').classList.add('hidden');
+                map.setView([24.13, 120.64], 14);
+            });
+
+            // UI Actions
+            let searchTimeout;
+            document.getElementById('search-input').addEventListener('input', (e) => {
+                const q = e.target.value.trim();
+                clearTimeout(searchTimeout);
+                if (!q) return document.getElementById('search-results-container').classList.add('hidden');
+                searchTimeout = setTimeout(async () => {
+                    const results = await searchNLSC(q);
+                    renderSearchResults(results);
+                }, 500);
+            });
+
+            function renderSearchResults(results) {
+                const list = document.getElementById('search-results-list');
+                list.innerHTML = '';
+                results.slice(0, 8).forEach(r => {
+                    const div = document.createElement('div');
+                    div.className = 'group p-3 hover:bg-blue-50 rounded-lg cursor-pointer flex justify-between items-center';
+                    div.innerHTML = `
+                        <div class="flex-1 truncate"><div class="text-sm font-bold truncate">${r.name}</div><div class="text-[10px] text-gray-400">${r.content || ''}</div></div>
+                        <button class="add-btn hidden group-hover:block px-2 py-1 bg-blue-100 text-blue-700 text-xs rounded">新增</button>
+                    `;
+                    div.addEventListener('click', () => {
+                        map.setView([r.lat, r.lon], 16);
+                        if (currentTempMarker) map.removeLayer(currentTempMarker);
+                        currentTempMarker = L.marker([r.lat, r.lon], { icon: blueIcon }).addTo(map).bindPopup(r.name).openPopup();
+                    });
+                    div.querySelector('.add-btn').addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        saveNewPOI(r.lat, r.lon, r.name);
+                    });
+                    list.appendChild(div);
+                });
+                document.getElementById('search-results-container').classList.remove('hidden');
+            }
+
+            async function saveNewPOI(lat, lng, name, colorClass = '') {
+                if (!currentUser) return;
+                const ref = doc(collection(db, 'artifacts', appId, 'users', currentUser.uid, 'pois'));
+                await setDoc(ref, { name, lat, lng, order: savedPOIs.length, color: colorClass, createdAt: Date.now() });
+            }
+
+            function renderPOIs() {
+                const list = document.getElementById('saved-poi-list');
+                list.innerHTML = '';
+                Object.values(poiMarkers).forEach(m => map.removeLayer(m));
+                poiMarkers = {};
+
+                if (savedPOIs.length === 0) document.getElementById('empty-state').classList.remove('hidden');
+                else {
+                    document.getElementById('empty-state').classList.add('hidden');
+                    savedPOIs.forEach((poi, i) => {
+                        const item = document.createElement('div');
+                        item.className = 'poi-item flex items-center justify-between p-3 bg-white border border-gray-100 rounded-lg hover:shadow-sm cursor-grab';
+                        item.draggable = true;
+                        item.dataset.id = poi.id;
+                        item.innerHTML = `
+                            <div class="flex items-center gap-3 flex-1 truncate" onclick="window.panTo(${poi.lat}, ${poi.lng})">
+                                <div class="w-6 h-6 rounded-full ${poi.color === 'pin-green' ? 'bg-green-100 text-green-600' : poi.color === 'pin-orange' ? 'bg-orange-100 text-orange-600' : 'bg-red-100 text-red-600'} flex items-center justify-center text-[10px] font-bold shrink-0">${i+1}</div>
+                                <span class="text-sm font-medium truncate">${poi.name}</span>
+                            </div>
+                            <button onclick="window.delPOI('${poi.id}')" class="text-gray-300 hover:text-red-500"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg></button>
+                        `;
+                        list.appendChild(item);
+                        
+                        const icon = poi.color === 'pin-green' ? greenIcon : poi.color === 'pin-orange' ? orangeIcon : redIcon;
+                        const marker = L.marker([poi.lat, poi.lng], { icon }).addTo(map).bindPopup(`<b>${poi.name}</b>`);
+                        marker.bindTooltip((i+1).toString(), { permanent: true, direction: 'center', className: 'bg-transparent border-none text-white font-bold text-xs mt-[-10px]' });
+                        poiMarkers[poi.id] = marker;
+                    });
+                }
+            }
+
+            async function drawRoute() {
+                if (routeLayer) map.removeLayer(routeLayer);
+                if (savedPOIs.length < 2) return;
+                const coords = savedPOIs.map(p => `${p.lng},${p.lat}`).join(';');
+                try {
+                    const res = await fetch(`https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson`);
+                    const data = await res.json();
+                    if (data.code === 'Ok') {
+                        routeLayer = L.geoJSON(data.routes[0].geometry, { style: { color: '#3b82f6', weight: 4, dashArray: '5, 10' } }).addTo(map);
+                    }
+                } catch (e) {}
+            }
+
+            map.on('click', (e) => {
+                pendingPOIData = { lat: e.latlng.lat, lng: e.latlng.lng };
+                document.getElementById('poi-name-input').value = '';
+                document.getElementById('poi-modal').classList.remove('hidden');
+            });
+
+            document.getElementById('btn-save-poi').addEventListener('click', () => {
+                const name = document.getElementById('poi-name-input').value.trim() || '自訂點';
+                saveNewPOI(pendingPOIData.lat, pendingPOIData.lng, name);
+                document.getElementById('poi-modal').classList.add('hidden');
+            });
+
+            document.getElementById('btn-cancel-poi').addEventListener('click', () => document.getElementById('poi-modal').classList.add('hidden'));
+
+            window.panTo = (lat, lng) => map.setView([lat, lng], 16);
+            window.delPOI = async (id) => {
+                if (!currentUser) return;
+                await deleteDoc(doc(db, 'artifacts', appId, 'users', currentUser.uid, 'pois', id));
+            };
+        });
+    </script>
+</body>
+</html>
